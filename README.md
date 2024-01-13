@@ -14,10 +14,10 @@ I am including a sample synthetic image, a training image, and a sample annotati
 
 This is an ongoing project with regular updates. There are two approaches for the placement of flanges in the box:
 - The random placement without any overlapping
-- - The downside of this attempt is that, since the placement is random without any overlapping there is less possibility of more shafts in the box.
+  - The downside of this attempt is that, since the placement is random without any overlapping there is less possibility of more shafts in the box.
   - If the run the code for 7 flanges, if there is no space for 5 or more in the frame, there will be a check of 1000 attempts to see if there is any, and then the iteration will fail.
 - The grid-based placement
-- - The issue is that the randomness is limited. But more guarantee that there will be a correct number of flanges if we run the code for 5 or more.
+  - The issue is that the randomness is limited. But more guarantee that there will be a correct number of flanges if we run the code for 5 or more.
  
 I am still working on this, attempting various approaches. 
 _____________________________________________________________________________________________________
