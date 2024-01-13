@@ -1,0 +1,557 @@
+#importing the libraries
+import bpy
+import random  
+import mathutils
+import os
+import time
+import math
+from math import *
+import bpy_extras
+import numpy as np
+from collections import Counter
+from mathutils import Vector
+from bpy_extras.object_utils import world_to_camera_view
+import numpy as np
+import cv2 # pip and with that opencv-python must be installed
+import os
+import time
+import sys
+
+
+# you have to install pip and PIL in blender´ python folder
+#   - folder can be found in blender´s python console:
+#       type import sys and then sys.exec_prefix, this gives python folder
+#   - open a powershell as admin and goto this folder, then to subfolder bin, enclose foldername in quotation marks
+#   - copy get-pip.py to this bin folder, get-pip.py can be downloaded from https://github.com/pypa/get-pip
+#   - go to parent folder python and type .\bin\python.exe .\bin\get-pip.py
+#       then a new folder scripts has been created in python subfolder, 
+#   - go to this new scripts folder and type pip install opencv-python
+#       then you can use cv2 with import cv2 in blender script
+#3
+#   this script requires the exact settings in blender objects and scene parameters
+#   it is helpful to show the blender output console window while running
+#   make 3d viewport as large as possible on your monitor
+#   select the box with left mouse button
+#   restart script if an error occurs
+#
+# select GPU in Edit->Preferences->System and save preferences
+# select GPU Rendering in Modeling->Properties->Render Properties tab
+
+#global constant parameters
+num_min_flange = 3  #minimum number of random created flanges
+num_max_flange = 3 #maximum number of random created flanges
+num_repetitions = 2# how many training images are to be created
+start_number = 90  # first number of saved image and annotation file
+num_frames = 300 # how many frames are created in rigid body simulation until stability #bulky shafts
+image_width = 256 #width of output training image
+image_height = 256 #height of output training image
+train_path = "D:\\Abhiram\\Project flange\\19.12\\temp\\"
+temp_path = "D:\\Abhiram\\Project flange\\19.12\\temp\\new_img\\"
+#obj_base_location = [0, 0, 0.65] #We are gonna randomise the base flange location, so no fixed location
+box_boundary = {
+    'min_x': -1.05,  # Define the minimum X coordinate of the box
+    'max_x': 1.05,   # Define the maximum X coordinate of the box
+    'min_y': -1.05,  # Define the minimum Y coordinate of the box
+    'max_y': 1.05,   # Define the maximum Y coordinate of the box
+    'fixed_z': 0.65
+}
+
+obj_stride_z = 3
+obj_var_xy = 1
+cylinder_radius = 0.6  # Define the radius of the cylindrical flange (Top view)
+
+# Illumination setting
+#num_min_areas = 2
+#num_max_areas = 2
+min_overall_power = 40000
+max_overall_power = 120000
+num_min_suns = 1
+num_max_suns = 1
+num_min_areas = 6
+num_max_areas = 10
+sun_energy_factor = 0.000000001
+# Store the lights created in each iteration
+created_lights = []
+
+grid_spacing = 1.1  # Define the spacing between grid positions
+grid_positions = []  # Store positions of placed cylinders
+
+
+render_ready = True
+
+#######################################################
+# functions
+####################################################### 
+# make all objects in blender selected or unselected
+def select_all_objects( select=True ):   
+    mem_mode = bpy.context.object.mode
+    
+    if not select:
+        if bpy.context.object.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+            
+        # deselect all nodes here, to do this, all polygons and vertices must be deselected. 
+        # This works in OBJECT edit mode only
+        for obj in  bpy.data.collections['Collection_Cylinders'].objects:
+            for polygon in obj.data.polygons:
+                polygon.select = False
+            for edge in obj.data.edges:
+                edge.select = False
+            for vertex in obj.data.vertices:
+                vertex.select = False
+                        
+        bpy.ops.object.mode_set(mode=mem_mode)    
+
+    for obj in bpy.context.selected_objects:
+        obj.select_set(select)
+        
+
+    #if select:
+    #    bpy.context.view_layer.objects.active = bpy.data.objects['Cylinder']
+        
+def switch_visibility_all_shafts( visible=True ):  #bulky shafts
+    for obj in  bpy.data.collections['Collection_Cylinders'].objects:
+        obj.hide_viewport = not visible
+
+
+## create and place illuminations   
+#def create_illuminations():
+#    # Access the existing illuminations by their names
+#    illumination_names = ["Area", "Area.001"]
+
+#    for name in illumination_names:
+#        light = bpy.data.objects.get(name)
+#        if light and light.type == 'LIGHT':
+#            light.data.energy = 10000
+#            print(f"Name: {light.name}, Type: {light.data.type}, Energy: {light.data.energy}")
+#            
+#            # Modify light properties if needed
+#            # For example:
+#            # light.data.energy = 10.0  # Set energy to 10.0
+
+#        else:
+#            print(f"Illumination '{name}' not found or is not a light.")
+
+
+
+# create and place illuminations in random positions and orientations     
+def create_illuminations( num_min_suns, num_max_suns, num_min_areas, num_max_areas, min_overall_power, max_overall_power ):
+    
+    
+    for light_object in created_lights:
+        bpy.data.objects.remove(light_object, do_unlink=True)
+    created_lights.clear()  # Clear the list for the new iteration
+    
+    # location restrictions
+    sun_max_gamma = 30/180*math.pi
+    area_max_gamma = 5/180*math.pi
+    sun_min_radius = 40
+    sun_max_radius = 100
+    area_max_radius = 80
+    area_min_size = 5
+    area_max_size = 20
+    
+    
+    
+    
+    #delete all lights
+#    select_all_objects( select=False )
+#    for obj in bpy.data.collections['Collection'].objects:
+#        if obj.type == 'LIGHT':
+#            obj.select_set( True )
+#    bpy.ops.object.delete()
+#    print("lights deleted")
+    
+    #set numbers of suns and areas
+    num_suns = random.randint( num_min_suns, num_max_suns )
+    num_areas = random.randint( num_min_areas, num_max_areas )
+    
+    #overall power rates
+    sun_power_all_rate = 0.0 #random.uniform( 0.0, 0.3)
+    area_power_all_rate = 1.0 - sun_power_all_rate
+    area_power_all = random.uniform( min_overall_power, max_overall_power ) 
+    
+    #single illumination power rates
+    sun_power_rates = np.random.rand( num_suns )
+    area_power_rates = np.random.rand( num_areas )
+
+    #normalize to sum==1.0
+    sum = np.sum( sun_power_rates ) + 1.0e-7
+    sun_power_rates = sun_power_rates/sum
+    sum = np.sum( area_power_rates ) + 1.0e-7
+    area_power_rates = area_power_rates/sum
+
+    #create suns
+    for i_obj in range( num_suns ):
+        obj_name = "sun_" + str( i_obj )
+    
+        light_data = bpy.data.lights.new(name=obj_name, type='SUN')
+        light_object = bpy.data.objects.new(name=obj_name, object_data=light_data)
+        bpy.data.collections['Collection'].objects.link( light_object )
+        light_object.location = [sun_min_radius + random.random()*(sun_max_radius - sun_min_radius),
+                                 sun_min_radius + random.random()*(sun_max_radius - sun_min_radius), 80.0]
+        light_object.rotation_euler = [sun_max_gamma*(random.random()-0.5)*2, sun_max_gamma*(random.random()-0.5)*2, 0.0]
+        light_object.data.energy = sun_power_rates[i_obj]*sun_power_all_rate*random.uniform( min_overall_power, max_overall_power)*sun_energy_factor
+        print( obj_name, " created")
+        
+        # Append the created light to the list
+        created_lights.append(light_object)
+
+    #create areas
+    
+    #global area
+    obj_name = "area_base" + str( i_obj )
+
+    light_data = bpy.data.lights.new(name=obj_name, type='AREA')
+    light_object = bpy.data.objects.new(name=obj_name, object_data=light_data)
+    bpy.data.collections['Collection'].objects.link( light_object )
+    light_object.location = [0, 0, 70]
+    light_object.data.size = 500;
+    light_object.rotation_euler = [0.0, 0.0, 0.0]
+    light_object.data.energy = 0.75*area_power_all
+
+    print( obj_name, " Energy=",  light_object.data.energy, "  size=",  light_object.data.size )
+
+    for i_obj in range( 0, num_areas ):
+        obj_name = "area_" + str( i_obj )
+    
+        light_data = bpy.data.lights.new(name=obj_name, type='AREA')
+        light_object = bpy.data.objects.new(name=obj_name, object_data=light_data)
+        bpy.data.collections['Collection'].objects.link( light_object )
+        light_object.location = [(random.random()*2.0-1.0)*area_max_radius,
+                                 (random.random()*2.0-1.0)*area_max_radius, 100.0]
+        light_object.rotation_euler = [area_max_gamma*(random.random()-0.5)*2, area_max_gamma*(random.random()-0.5)*2, 0.0]
+        light_object.data.size = random.randint( area_min_size, area_max_size)
+        light_object.data.energy = area_power_rates[i_obj]*area_power_all
+
+        print( obj_name, " Energy=",  light_object.data.energy, "  size=",  light_object.data.size )
+        
+    
+    # create lightbar (fixed position and orientation)
+    obj_name = "lightbar"
+    lightbar_data = bpy.data.lights.new(name=obj_name, type='AREA')
+    lightbar_data.shape = 'RECTANGLE'  
+    lightbar_object = bpy.data.objects.new(name=obj_name, object_data=lightbar_data)
+    bpy.data.collections['Collection'].objects.link(lightbar_object)
+    lightbar_object.location = [0, 15, 100]  
+    lightbar_object.rotation_euler = [0.0, 0.0, 0.0]  
+    lightbar_object.scale = (1400, 70, 1)  
+    lightbar_data.energy = 180000  
+
+    print(obj_name, " Energy=", lightbar_object.data.energy, "  size=", lightbar_object.scale) 
+
+
+# To make sure that the flanges are always inside the box boundary
+def get_random_location_in_box(boundary):
+    return [
+        random.uniform(boundary['min_x'], boundary['max_x']),
+        random.uniform(boundary['min_y'], boundary['max_y']),
+        boundary['fixed_z']
+    ]
+
+# This function is to avoid overlapping of flanges
+#def check_collision(new_position, existing_positions, cylinder_radius):
+#    for existing_pos in existing_positions:
+#        if ((new_position[0] - existing_pos[0])**2 + (new_position[1] - existing_pos[1])**2) < (2 * cylinder_radius)**2:
+#            return True
+#    return False
+def check_collision(new_position, existing_positions, cylinder_radius):
+    for existing_pos in existing_positions:
+        distance = math.sqrt((new_position[0] - existing_pos[0])**2 + (new_position[1] - existing_pos[1])**2)
+        if distance < (2 * cylinder_radius):
+            return True
+    return False
+
+
+# create and place flanges in random positions and orientations
+def clone_objects( num_objects ):
+    bpy.ops.object.mode_set(mode='OBJECT')
+    
+    # Randomize base flange location within defined box boundaries for the template cylinder
+    while True:
+        obj_base_location = get_random_location_in_box(box_boundary)
+        if not check_collision(obj_base_location, [], cylinder_radius):  # Check collision with an empty list
+            break  # No collision, proceed with this position
+
+    obj_z = obj_base_location[2]  # Fixed Z value
+
+    # Deselect all objects
+    select_all_objects( False )
+    
+    # delete all cloned flanges with exception of first flange which is the template flange
+    objs = bpy.data.collections['Collection_Cylinders'].objects
+    
+    for i in range (1,len( objs )):
+        objs[i].select_set( True )
+    bpy.ops.object.delete()
+    
+    ctx = bpy.context
+    
+    # source object, fixed Z and rotation angle gamma around Z-axis
+    src_obj =  bpy.data.collections['Collection_Cylinders'].objects[0]
+    src_obj.location = [obj_base_location[0], obj_base_location[1], obj_z]  # Fixed Z-axis
+
+    cylinder_positions = [obj_base_location]  # Store positions of placed cylinders
+    
+    # Clone all new shafts from the first one and reposition them
+    for i in range(1, num_objects):
+        attempt = 0
+        while True:
+            if attempt > 1000:  # Limit attempts to prevent infinite loop
+                break
+            
+            x_offset = random.uniform(box_boundary['min_x'], box_boundary['max_x'])
+            y_offset = random.uniform(box_boundary['min_y'], box_boundary['max_y'])
+            new_position = [x_offset, y_offset]
+        
+            # Check for collision with existing cylinders
+            if not check_collision(new_position, cylinder_positions, cylinder_radius):
+                break  # No collision, proceed with this position
+        
+            attempt += 1
+    
+        if attempt > 1000:
+            print("Collision resolution failed after 1000 attempts. Exiting loop.")
+            break  # Exit the loop if collision resolution fails
+            
+        
+        new_obj = src_obj.copy()
+        new_obj.animation_data_clear()
+        new_obj.data = src_obj.data.copy()
+        bpy.data.collections['Collection_Cylinders'].objects.link(new_obj)
+        
+        # Set location with fixed Z and random XY
+        new_obj.location = [new_position[0], new_position[1], obj_z]
+        
+        # Set rotation around Z-axis
+        new_obj.rotation_euler = [0, 0, random.random() * math.pi]
+        
+        # Store position of this cylinder
+        cylinder_positions.append(new_position)
+# get blender 3dview window area and region
+def getView3dAreaAndRegion(context):
+    for area in bpy.context.screen.areas: 
+        if area.type == "VIEW_3D":    
+            for region in area.regions:
+                if region.type == "WINDOW":
+                    print("Found WINDOW")
+                    return area, region
+        
+# set 3dview window to camera view
+def set_camera_view():
+    select_all_objects( select=False )
+    bpy.data.objects['Box'].select_set( True )
+    bpy.ops.object.mode_set(mode='OBJECT')  #needs any object beeing selected
+
+
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            view3dAreaAndRegion = getView3dAreaAndRegion(bpy.context)
+            view3dArea, view3dRegion = view3dAreaAndRegion
+
+            area.spaces[0].region_3d.view_perspective = 'CAMERA'
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+            ctx = bpy.context.copy()
+            #ctx['area'] = area
+            #ctx['region'] = area.regions[-1]
+            ctx['area'] = view3dArea 
+            ctx['region'] = view3dRegion
+
+            bpy.ops.view3d.view_selected( ctx)  # zoom window to display all objects
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+
+# set all not hided shafts to visible
+def select_all_shafts():   #bulky shafts
+    bpy.ops.object.mode_set(mode='OBJECT')
+    select_all_objects( select=False )
+    print( "all objects deselected" )
+    for obj in bpy.data.collections['Collection_Cylinders'].objects:
+        obj.select_set( True )
+    print( "all shafts selected" )
+    bpy.data.objects['Box'].select_set( False )
+
+    
+def select_object( obj ):   #bulky shafts
+    obj.select_set(True)
+    
+# set all visible vertices in all visible shafts to selected
+def select_visible_vertices():  #bulky shafts
+    bpy.ops.object.mode_set(mode='EDIT')
+    
+    for area in bpy.context.screen.areas:
+        if area.type == 'VIEW_3D':
+            view3dAreaAndRegion = getView3dAreaAndRegion(bpy.context)
+            view3dArea, view3dRegion = view3dAreaAndRegion
+
+            area.spaces[0].region_3d.view_perspective = 'CAMERA'
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+            ctx = bpy.context.copy()
+            #ctx['area'] = area
+            #ctx['region'] = area.regions[-1]
+            ctx['area'] = view3dArea 
+            ctx['region'] = view3dRegion
+
+            view3dArea = ctx['area']
+    
+            bpy.ops.view3d.select_box(ctx,xmin=0,xmax=view3dArea.width,ymin=0,ymax=view3dArea.height,mode='ADD')
+            
+    bpy.ops.object.mode_set(mode='OBJECT') #evaluate temporal selections made in edit mode
+
+    
+# get confidence array for all visible shafts and all vertex groups within shafts all_confidences[i_shaft][i_vertex_group]
+# referred to unhidden individual shaft´s visible vertex number
+def get_shaft_confidences_top():
+    all_confidences = []
+    #bpy.ops.object.mode_set(mode='OBJECT')
+    # Loop through objects
+    for obj in bpy.data.collections['Collection_Cylinders'].objects:
+        bpy.context.view_layer.objects.active = obj
+        
+        # Filter vertices based on Z-coordinate (considering only top vertices)
+        top_vertices = [v for v in obj.data.vertices if v.co.z > 0.2 * max(v.co.z for v in obj.data.vertices)]
+        
+        count_vert = len(top_vertices)
+        total_vert = len(obj.data.vertices)  # Get total vertices count for normalization
+        
+        # Calculate confidence (normalized count of top vertices)
+        if total_vert > 0:
+            confidence = count_vert / total_vert
+        else:
+            confidence = 0.0
+        
+        all_confidences.append(confidence)
+    
+    return all_confidences
+
+    
+# write annotation for this basename to annotation file        
+def write_annotations_and_rendered_image(confidences, repetition, base_filename):
+    text = ""     
+    bpy.ops.object.mode_set(mode='OBJECT')    
+    scene = bpy.context.scene
+    camera = bpy.data.objects['Camera']   
+    for obj in bpy.data.collections['Collection_Cylinders'].objects:
+        ol = obj.matrix_world.translation
+        coordinates_2d = bpy_extras.object_utils.world_to_camera_view(scene, camera, ol)
+        renderscale = scene.render.resolution_percentage / 100
+        rendersize = (
+            int(scene.render.resolution_x * renderscale),
+            int(scene.render.resolution_y * renderscale),
+        )
+        xx = float(coordinates_2d.x * rendersize[0])
+        yy = float(coordinates_2d.y * rendersize[1])
+
+        a = obj.matrix_world.to_euler('XYZ')
+        gamma_degrees = math.degrees(a[2] % (2 * math.pi))  # Use one rotation angle
+        
+        # Right now we are only adding x and y coordinates in the annotation file
+        # We could add Gamma angle value and the confidence value if wanted, I have already added the code.
+        # Confidence equation might need some modification
+        
+        text += f"0 {xx} {yy} \n"  # Compose annotation text
+    # Write annotations to a text file 
+    textfile = open(base_filename + str(repetition).zfill(6) + '.txt', 'w')  
+    textfile.write(text)
+    textfile.close()
+    
+    # Save rendered image in the desired format
+    scene.render.image_settings.file_format = 'BMP'
+    scene.render.image_settings.color_depth = '8'
+    scene.render.image_settings.color_mode = 'RGB'
+    scene.render.image_settings.compression = 0
+    #scene.render.filepath = base_filename + str(repetition).zfill(6) + '.bmp'
+    scene.render.filepath = temp_path +"temp_color.bmp"
+    bpy.ops.render.render(write_still=True)  # Render and save the image
+    time.sleep( 5 )
+    print( "done", flush=True )
+    
+
+    
+# bake the animation
+def simulate(): 
+    print( "baking" )
+    bpy.ops.ptcache.free_bake_all()
+    bpy.ops.ptcache.bake_all(bake=True)
+    bpy.context.scene.frame_set(bpy.context.scene.frame_end-1)  
+    print( "number of frames=", bpy.context.scene.frame_end )
+
+# render complete event handler in which rendered image is loaded, 
+# converted to grey scale and saved as training image
+def render_complete( dummy ):  #bulky shafts
+    
+    global render_ready
+    # load rendered image and convert it to greyscale
+    base_filename = train_path + "img_"
+    img = bpy.data.images.load( temp_path +"temp_color.bmp" )
+
+    arr_img = np.array(img.pixels)
+    sqrt_3 = math.sqrt( 3 )
+    
+    index = 0
+    while index < len(img.pixels):
+        grey_val = arr_img[index]*arr_img[index] + arr_img[index+1]*arr_img[index+1] + arr_img[index+2]*arr_img[index+2]
+        grey_val = grey_val / sqrt_3
+        arr_img[index] = grey_val
+        arr_img[index+1] = grey_val
+        arr_img[index+2] = grey_val
+        index += 4
+        
+    arr_img = np.reshape( arr_img, (img.size[1], img.size[0], 4) )*255
+    cv2.imwrite( base_filename + str(repetition + start_number).zfill(6) +".bmp", arr_img )
+    print( "training image saved", flush=True )
+    
+    render_ready = True
+
+
+#######################################################
+# main program
+#######################################################   
+
+try:
+    #deleting and creating new dynamics
+    print( "\n\n" )
+    print( "----------------------------------------" )
+    print( "images and annotations generator started" )
+    
+    for h in bpy.app.handlers.render_complete:
+        print( "removing render_complete handler" )
+        bpy.app.handlers.render_complete.remove( h )
+    bpy.app.handlers.render_complete.append( render_complete )  #register render_complete event handler
+    set_camera_view()
+     
+    
+    
+
+    repetition = 0
+    
+    while repetition < num_repetitions:
+        
+        clone_objects( random.randint( num_min_flange, num_max_flange ))
+        print('Hello')
+        create_illuminations( num_min_suns, num_max_suns, num_min_areas, num_max_areas, min_overall_power, max_overall_power )
+        print ('Hii')
+        simulate() 
+        
+        confidences = get_shaft_confidences_top() 
+        print( "confidences computed" ) 
+        write_annotations_and_rendered_image( confidences, repetition + start_number, train_path + "img_" ) 
+        #write_rendered_image( repetition + start_number, train_path + "img_" )
+        
+        
+        # make shure that render thread is finished before continuing with next bake
+        print( "ready, repetition=", repetition )
+        repetition += 1
+    
+    print( "exit normal" )
+except:
+    print( "exit with error" )
+    
+    
+    
+    
+    
+       
+  
